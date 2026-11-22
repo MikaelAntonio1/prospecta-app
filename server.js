@@ -435,7 +435,7 @@ app.get('/api/prospeccoes', auth, wrap(async (req, res) => {
   if (q) {
     params.push('%' + q + '%');
     const n = '$' + params.length;
-    cond.push(`(p.empresa ILIKE ${n} OR p.telefone ILIKE ${n} OR p.localidade ILIKE ${n} OR n.nome ILIKE ${n})`);
+    cond.push(`(p.empresa ILIKE ${n} OR p.telefone ILIKE ${n} OR p.localidade ILIKE ${n} OR p.cidade ILIKE ${n} OR p.bairro ILIKE ${n} OR p.estado ILIKE ${n} OR n.nome ILIKE ${n})`);
   }
   if (STATUS.includes(req.query.status)) add('p.status = ?', req.query.status);
   if (req.query.nicho === 'sem') cond.push('p.nicho_id IS NULL');
@@ -470,6 +470,93 @@ async function buscarProsp(id) {
   const { rows } = await pool.query(`${SELECT_P} WHERE p.id = $1`, [id]);
   return rows[0];
 }
+
+// ---------- região (estado, cidade, bairro) ----------
+const UFS = ['AC', 'AL', 'AP', 'AM', 'BA', 'CE', 'DF', 'ES', 'GO', 'MA', 'MT', 'MS', 'MG', 'PA', 'PB', 'PR', 'PE', 'PI',
+  'RJ', 'RN', 'RS', 'RO', 'RR', 'SC', 'SP', 'SE', 'TO'];
+// "PE", "pe" → "PE". Vazio → null. Sigla que não existe → undefined (erro)
+function lerUF(v) {
+  const uf = String(v ?? '').trim().toUpperCase();
+  if (!uf) return null;
+  return UFS.includes(uf) ? uf : undefined;
+}
+// "boa viagem" → "Boa Viagem" ("de", "da", "do"... ficam minúsculos)
+const MINUSC = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
+const capitalizar = (t) => t.toLowerCase().replace(/\s+/g, ' ')
+  .split(' ').map((w, i) => (i > 0 && MINUSC.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1))).join(' ');
+// Se alguém já escreveu essa cidade/bairro, usa a mesma grafia (sem diferença de acento, maiúscula ou espaço).
+// Assim "boa viagem" e "Boa Viagem " viram o mesmo bairro. Se é novo, salva com as iniciais maiúsculas.
+async function padronizarLocal(campo, valor, estado, cidade = null) {
+  if (!valor) return null;
+  const params = [valor, estado];
+  let extra = '';
+  if (campo === 'bairro') { params.push(cidade || ''); extra = `AND ${SQL_NOME.replace('%s', 'p.cidade')} = ${SQL_NOME.replace('%s', '$3')}`; }
+  const { rows } = await pool.query(`
+    SELECT p.${campo === 'bairro' ? 'bairro' : 'cidade'} AS nome, COUNT(*) AS n FROM prospeccoes p
+     WHERE p.estado IS NOT DISTINCT FROM $2
+       AND ${SQL_NOME.replace('%s', 'p.' + (campo === 'bairro' ? 'bairro' : 'cidade'))} = ${SQL_NOME.replace('%s', '$1')} ${extra}
+     GROUP BY 1 ORDER BY n DESC LIMIT 1`, params);
+  return rows[0]?.nome || capitalizar(valor);
+}
+async function lerRegiao(b, atual = null) {
+  // estado: obrigatório nas empresas novas. Nas antigas (sem estado) pode continuar vazio ao editar.
+  let estado = 'estado' in b ? lerUF(b.estado) : (atual ? atual.estado : null);
+  if (estado === undefined) return { erro: 'Escolha um estado válido.' };
+  if (!estado && (!atual || atual.estado)) return { erro: 'Escolha o estado da empresa.' };
+  const cidadeTxt = 'cidade' in b ? txt(b.cidade, 80) : (atual ? atual.cidade : null);
+  const bairroTxt = 'bairro' in b ? txt(b.bairro, 80) : (atual ? atual.bairro : null);
+  const cidade = 'cidade' in b ? await padronizarLocal('cidade', cidadeTxt, estado) : cidadeTxt;
+  const bairro = 'bairro' in b ? await padronizarLocal('bairro', bairroTxt, estado, cidade) : bairroTxt;
+  return { estado, cidade, bairro };
+}
+
+// sugestões para os campos: cidades de um estado, ou bairros de uma cidade (o que a equipe já digitou)
+app.get('/api/locais', auth, wrap(async (req, res) => {
+  const uf = lerUF(req.query.estado);
+  if (!uf) return res.json([]);
+  const cidade = txt(req.query.cidade, 80);
+  const { rows } = cidade
+    ? await pool.query(`
+        SELECT bairro AS nome, COUNT(*)::int AS total FROM prospeccoes
+         WHERE estado = $1 AND bairro IS NOT NULL
+           AND ${SQL_NOME.replace('%s', 'cidade')} = ${SQL_NOME.replace('%s', '$2')}
+         GROUP BY bairro ORDER BY total DESC, lower(bairro)`, [uf, cidade])
+    : await pool.query(`
+        SELECT cidade AS nome, COUNT(*)::int AS total FROM prospeccoes
+         WHERE estado = $1 AND cidade IS NOT NULL
+         GROUP BY cidade ORDER BY total DESC, lower(cidade)`, [uf]);
+  res.json(rows);
+}));
+
+// ---------- aba Regiões: onde a equipe prospecta e onde mais aceitam ----------
+// ?nivel=estado|cidade|bairro  &estado=PE (opcional)  &nicho=id|sem (opcional)  + período
+app.get('/api/regioes', auth, wrap(async (req, res) => {
+  const nivel = ['estado', 'cidade', 'bairro'].includes(req.query.nivel) ? req.query.nivel : 'estado';
+  const params = [];
+  const cond = [];
+  const per = periodo(req, 'p.criado_em', params);
+  if (per) cond.push(per.replace(/^ AND /, ''));
+  const uf = lerUF(req.query.estado);
+  if (uf) { params.push(uf); cond.push(`p.estado = $${params.length}`); }
+  if (req.query.nicho === 'sem') cond.push('p.nicho_id IS NULL');
+  else if (Number(req.query.nicho)) { params.push(Number(req.query.nicho)); cond.push(`p.nicho_id = $${params.length}`); }
+  const where = cond.length ? 'WHERE ' + cond.join(' AND ') : '';
+
+  const grupo = { estado: ['p.estado'], cidade: ['p.estado', 'p.cidade'], bairro: ['p.estado', 'p.cidade', 'p.bairro'] }[nivel];
+  const coluna = grupo[grupo.length - 1];
+  const contas = `COUNT(*)::int AS total,
+           COUNT(*) FILTER (WHERE p.status = 'aceitou')::int  AS aceitou,
+           COUNT(*) FILTER (WHERE p.status = 'pensando')::int AS pensando,
+           COUNT(*) FILTER (WHERE p.status = 'recusou')::int  AS recusou`;
+  const regioes = (await pool.query(`
+    SELECT ${grupo.map((c) => `${c} AS ${c.slice(2)}`).join(', ')}, ${contas}, MAX(p.criado_em) AS ultima
+      FROM prospeccoes p ${where} ${where ? 'AND' : 'WHERE'} ${coluna} IS NOT NULL
+     GROUP BY ${grupo.join(', ')} ORDER BY total DESC, ${grupo.map((c) => `lower(${c})`).join(', ')}`, params)).rows;
+  const geral = (await pool.query(`
+    SELECT ${contas}, COUNT(*) FILTER (WHERE ${coluna} IS NULL)::int AS sem_info
+      FROM prospeccoes p ${where}`, params)).rows[0];
+  res.json({ nivel, regioes, total: geral.total, sem_info: geral.sem_info });
+}));
 
 // ---------- empresa repetida: mesmo nome OU mesmo telefone ----------
 // nome: sem diferença de maiúscula, acento e espaços extras. telefone: só os números, sem o 55 do Brasil.
@@ -513,6 +600,8 @@ app.post('/api/prospeccoes', auth, wrap(async (req, res) => {
 
   const retorno = lerRetorno(b.retorno_em);
   if (retorno === undefined) return erro(res, 400, 'Data de retorno inválida.');
+  const reg = await lerRegiao(b);
+  if (reg.erro) return erro(res, 400, reg.erro);
   // já existe? avisa e só salva se a pessoa confirmar
   if (!b.confirmar_repetida) {
     const rep = await acharRepetidas(d.empresa, d.telefone);
@@ -522,9 +611,11 @@ app.post('/api/prospeccoes', auth, wrap(async (req, res) => {
   }
   const nid = await nichoId(b.nicho, req.user.id);
   const { rows } = await pool.query(
-    `INSERT INTO prospeccoes (empresa, nicho_id, status, telefone, localidade, instagram, site, outras_redes, anotacoes, usuario_id, retorno_em)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::date) RETURNING id`,
-    [d.empresa, nid, b.status, d.telefone, d.localidade, d.instagram, d.site, d.outras_redes, d.anotacoes, req.user.id, retorno]
+    `INSERT INTO prospeccoes (empresa, nicho_id, status, telefone, localidade, instagram, site, outras_redes, anotacoes, usuario_id, retorno_em,
+                              estado, cidade, bairro)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::date,$12,$13,$14) RETURNING id`,
+    [d.empresa, nid, b.status, d.telefone, d.localidade, d.instagram, d.site, d.outras_redes, d.anotacoes, req.user.id, retorno,
+     reg.estado, reg.cidade, reg.bairro]
   );
   await salvarProblemas(rows[0].id, b.problemas, req.user.id);
   await registrar(req, 'prospeccao', 'criou', rows[0].id,
@@ -554,11 +645,15 @@ app.put('/api/prospeccoes/:id', auth, wrap(async (req, res) => {
     retorno = null;
   }
   const encerrou = !('retorno_em' in b) && atual.retorno && !retorno;
+  const reg = await lerRegiao(b, atual);
+  if (reg.erro) return erro(res, 400, reg.erro);
 
   await pool.query(
     `UPDATE prospeccoes SET empresa=$1, nicho_id=$2, status=$3, telefone=$4, localidade=$5, instagram=$6,
-            site=$7, outras_redes=$8, anotacoes=$9, retorno_em=$10::date, atualizado_em=now() WHERE id=$11`,
-    [d.empresa, nid, status, d.telefone, d.localidade, d.instagram, d.site, d.outras_redes, d.anotacoes, retorno, atual.id]
+            site=$7, outras_redes=$8, anotacoes=$9, retorno_em=$10::date, estado=$12, cidade=$13, bairro=$14,
+            atualizado_em=now() WHERE id=$11`,
+    [d.empresa, nid, status, d.telefone, d.localidade, d.instagram, d.site, d.outras_redes, d.anotacoes, retorno, atual.id,
+     reg.estado, reg.cidade, reg.bairro]
   );
   const antesProb = JSON.stringify(atual.problemas || []);
   if ('problemas' in b) await salvarProblemas(atual.id, b.problemas, req.user.id);
@@ -577,6 +672,7 @@ app.put('/api/prospeccoes/:id', auth, wrap(async (req, res) => {
   const campos = { telefone: 'número', localidade: 'localidade', instagram: 'Instagram', site: 'site', outras_redes: 'outras redes', anotacoes: 'anotações' };
   const outros = Object.keys(campos).filter((c) => (d[c] || null) !== (atual[c] || null)).map((c) => campos[c]);
   if (nid !== atual.nicho_id) outros.unshift('nicho');
+  for (const c of ['estado', 'cidade', 'bairro']) if ((reg[c] || null) !== (atual[c] || null)) outros.push(c);
   if (JSON.stringify(novo.problemas || []) !== antesProb) outros.push('problemas');
   if (outros.length) mud.push(`mudou ${outros.join(', ')}`);
   if (mud.length) {

@@ -980,3 +980,37 @@ form.so-leitura button.primario { display: none; }
 @media (max-width: 860px) {
   .equipe-filtros:has(#eq-online:not([hidden])) { grid-template-columns: 1fr; }
 }
+
+/* ---------- região no cadastro (estado, cidade, bairro) ---------- */
+.rotulo-campo { font-size: 13.5px; font-weight: 600; color: var(--texto-2); }
+.linha-regiao { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 10px; align-items: start; }
+.sub-campo { display: grid; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--texto-3); min-width: 0; }
+.sub-campo > label { font-size: 12.5px; color: var(--texto-3); display: block; }
+@media (max-width: 560px) { .linha-regiao { grid-template-columns: 1fr; } }
+
+/* região na lista de prospecções */
+.item .sub .reg-mini { display: inline-flex; align-items: center; gap: 3px; }
+.reg-mini svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------- aba Regiões ---------- */
+.rg-niveis { display: inline-flex; gap: 2px; padding: 4px; margin-bottom: 12px; border: 1px solid var(--borda); border-radius: 12px; background: var(--superficie); }
+.rg-niveis button { border: 0; background: transparent; font: inherit; font-size: 14px; font-weight: 600; color: var(--texto-2); padding: 7px 16px; border-radius: 9px; cursor: pointer; }
+.rg-niveis button:hover { background: var(--superficie-2); color: var(--texto); }
+.rg-niveis button.ativo { background: var(--primaria-suave); color: var(--primaria); }
+.rg-filtros { grid-template-columns: minmax(0, 1fr) 180px 200px 200px; }
+.rg-linha { display: grid; grid-template-columns: 34px minmax(0, 1fr) 120px; align-items: center; gap: 14px; padding: 12px 8px; }
+.rg-linha + .rg-linha { border-top: 1px solid var(--borda); }
+.rg-linha .rk-top { margin-bottom: 6px; }
+.rg-linha .rg-onde { font-size: 12.5px; color: var(--texto-3); font-weight: 500; margin-left: 6px; }
+.rg-taxa { text-align: right; font-variant-numeric: tabular-nums; }
+.rg-taxa strong { display: block; font-size: 20px; color: var(--aceitou); }
+.rg-taxa span { font-size: 11.5px; color: var(--texto-3); font-weight: 600; }
+.rg-taxa.pouco strong { color: var(--texto-3); }
+.rg-sem { margin: 0 0 8px; padding: 9px 12px; border-radius: 10px; background: var(--superficie-2); font-size: 13.5px; color: var(--texto-2); }
+.rg-sem b { color: var(--texto); }
+.rg-dica { margin: 12px 0 0; }
+@media (max-width: 860px) {
+  .rg-filtros { grid-template-columns: 1fr 1fr; }
+  .rg-filtros #rg-busca, .rg-filtros #rg-ordem { grid-column: 1 / -1; }
+  .rg-linha { grid-template-columns: 28px minmax(0, 1fr) 76px; gap: 10px; }
+}

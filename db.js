@@ -81,6 +81,12 @@ async function init() {
     -- comissão manual em porcentagem do valor do projeto (ex.: 15 = 15%)
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS comissao_pct NUMERIC(6,2) CHECK (comissao_pct >= 0 AND comissao_pct <= 100);
 
+    -- Região da empresa: estado (sigla, obrigatório nas novas), cidade e bairro (opcionais)
+    ALTER TABLE prospeccoes ADD COLUMN IF NOT EXISTS estado CHAR(2);
+    ALTER TABLE prospeccoes ADD COLUMN IF NOT EXISTS cidade TEXT;
+    ALTER TABLE prospeccoes ADD COLUMN IF NOT EXISTS bairro TEXT;
+    CREATE INDEX IF NOT EXISTS prospeccoes_estado ON prospeccoes (estado);
+
     -- Lembrete de retorno: dia para ligar de novo para a empresa
     ALTER TABLE prospeccoes ADD COLUMN IF NOT EXISTS retorno_em DATE;
     CREATE INDEX IF NOT EXISTS prospeccoes_retorno ON prospeccoes (retorno_em) WHERE retorno_em IS NOT NULL;
