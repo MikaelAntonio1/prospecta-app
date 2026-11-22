@@ -7,6 +7,20 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const STATUS = { aceitou: 'Aceitou', pensando: 'Pensando', recusou: 'Recusou' };
+const ESTADOS = [
+  ['AC', 'Acre'], ['AL', 'Alagoas'], ['AP', 'Amapá'], ['AM', 'Amazonas'], ['BA', 'Bahia'], ['CE', 'Ceará'],
+  ['DF', 'Distrito Federal'], ['ES', 'Espírito Santo'], ['GO', 'Goiás'], ['MA', 'Maranhão'], ['MT', 'Mato Grosso'],
+  ['MS', 'Mato Grosso do Sul'], ['MG', 'Minas Gerais'], ['PA', 'Pará'], ['PB', 'Paraíba'], ['PR', 'Paraná'],
+  ['PE', 'Pernambuco'], ['PI', 'Piauí'], ['RJ', 'Rio de Janeiro'], ['RN', 'Rio Grande do Norte'],
+  ['RS', 'Rio Grande do Sul'], ['RO', 'Rondônia'], ['RR', 'Roraima'], ['SC', 'Santa Catarina'], ['SP', 'São Paulo'],
+  ['SE', 'Sergipe'], ['TO', 'Tocantins'],
+];
+const NOME_UF = Object.fromEntries(ESTADOS);
+// "Boa Viagem, Recife – PE" (o que tiver preenchido)
+function textoRegiao(p, { bairro = true } = {}) {
+  const cid = [p.cidade, p.estado].filter(Boolean).join(' – ');
+  return [bairro ? p.bairro : null, cid].filter(Boolean).join(', ');
+}
 const estado = { eu: null, equipe: [], nichos: [], prosp: [], dias: '30' };
 
 // ---------- comunicação com o servidor ----------
@@ -353,6 +367,19 @@ function preencherFiltros() {
   fu.value = vu;
 
   $('#lista-nichos').innerHTML = estado.nichos.map((n) => `<option value="${esc(n.nome)}"></option>`).join('');
+
+  // região: estado do cadastro e filtros da aba Regiões
+  const opUF = ESTADOS.map(([uf, nome]) => `<option value="${uf}">${esc(nome)} (${uf})</option>`).join('');
+  const ie = $('#in-estado');
+  if (!ie.options.length) ie.innerHTML = '<option value="">Escolha…</option>' + opUF;
+  const re = $('#rg-estado');
+  if (!re.options.length) re.innerHTML = '<option value="">Todos os estados</option>' + opUF;
+  const rn = $('#rg-nicho');
+  const vrn = rn.value;
+  rn.innerHTML = '<option value="">Todos os nichos</option>' +
+    estado.nichos.map((n) => `<option value="${n.id}">${esc(n.nome)}</option>`).join('') +
+    '<option value="sem">Sem nicho</option>';
+  rn.value = vrn;
 }
 
 // leva para Prospecções já filtrado por um nicho, com o período da tela de onde veio
@@ -374,14 +401,14 @@ function irParaNicho(nichoId, filtroOrigem) {
 function rotear() {
   if (!estado.eu) return;
   let v = location.hash.slice(1) || 'prospeccoes';
-  if (!['prospeccoes', 'painel', 'nichos', 'observacoes', 'ganhos', 'equipe', 'financeiro', 'historico', 'perfil'].includes(v)) v = 'prospeccoes';
+  if (!['prospeccoes', 'painel', 'nichos', 'observacoes', 'regioes', 'ganhos', 'equipe', 'financeiro', 'historico', 'perfil'].includes(v)) v = 'prospeccoes';
   if ((v === 'equipe' || v === 'financeiro' || v === 'historico') && !veTudo()) v = 'prospeccoes';
   if (v === 'ganhos' && estado.eu.papel === 'admin') v = 'financeiro';
 
   $$('.view').forEach((s) => s.classList.toggle('ativa', s.id === 'view-' + v));
   $$('.abas a').forEach((a) => a.classList.toggle('ativa', a.dataset.view === v));
 
-  ({ prospeccoes: carregarProsp, painel: carregarPainel, nichos: carregarNichos, observacoes: carregarObs, ganhos: carregarGanhos, equipe: carregarUsuarios, financeiro: carregarFinanceiro, historico: carregarHistorico, perfil: renderPerfil })[v]()
+  ({ prospeccoes: carregarProsp, painel: carregarPainel, nichos: carregarNichos, observacoes: carregarObs, regioes: carregarRegioes, ganhos: carregarGanhos, equipe: carregarUsuarios, financeiro: carregarFinanceiro, historico: carregarHistorico, perfil: renderPerfil })[v]()
     .catch?.((e) => toast(e.message, 'erro'));
 }
 window.addEventListener('hashchange', rotear);
@@ -433,6 +460,7 @@ function renderLista() {
           <span class="sub">
             ${p.nicho ? `<span class="tag">${esc(p.nicho)}</span>` : ''}
             ${p.telefone ? `<span>${esc(p.telefone)}</span>` : ''}
+            ${p.estado ? `<span class="reg-mini">${ICONE_PIN}${esc(textoRegiao(p, { bairro: false }))}</span>` : ''}
             ${p.retorno ? `<span class="ret-mini ${classeRetorno(p.retorno_dias)}" title="Ligar de novo">${ICONE_RELOGIO}${esc(rotuloRetorno(p.retorno_dias, p.retorno))}</span>` : ''}
           </span>
         </div>
@@ -496,7 +524,9 @@ function abrirDetalhe(id) {
       <div class="det-linha"><dt>Número</dt><dd>
         ${p.telefone ? `<span>${esc(p.telefone)}</span>${zap ? `<a class="zap" href="${esc(zap)}" target="_blank" rel="noopener noreferrer">Abrir no WhatsApp ↗</a>` : ''}` : vazio}
       </dd></div>
-      <div class="det-linha"><dt>Localidade</dt><dd>${p.localidade ? campoLink(p.localidade, linkMapa(p.localidade)) : vazio}</dd></div>
+      <div class="det-linha"><dt>Região</dt><dd>${textoRegiao(p)
+        ? campoLink(textoRegiao(p), linkMapa(textoRegiao(p)))
+        : (p.localidade ? campoLink(p.localidade, linkMapa(p.localidade)) : vazio)}</dd></div>
       <div class="det-linha"><dt>Instagram</dt><dd>${p.instagram ? campoLink(p.instagram, linkInsta(p.instagram)) : vazio}</dd></div>
       <div class="det-linha"><dt>Site</dt><dd>${p.site ? campoLink(p.site, linkSeguro(p.site)) : vazio}</dd></div>
       <div class="det-linha"><dt>Outras redes</dt><dd>${outras || vazio}</dd></div>
@@ -586,14 +616,18 @@ function abrirFormProsp(p = null) {
   mostrarRepetidas([]);
   $('#dlg-prosp-titulo').textContent = p ? 'Editar prospecção' : 'Nova prospecção';
   if (p) {
-    for (const c of ['empresa', 'nicho', 'telefone', 'localidade', 'instagram', 'site', 'outras_redes', 'anotacoes']) {
-      f[c].value = p[c] || '';
+    for (const c of ['empresa', 'nicho', 'telefone', 'estado', 'cidade', 'bairro', 'instagram', 'site', 'outras_redes', 'anotacoes']) {
+      f[c].value = (p[c] || '').trim();
     }
     f.querySelector(`[name=status][value=${p.status}]`).checked = true;
     f.retorno_em.value = p.retorno || '';
   }
-  $('#mais-info').open = Boolean(p && (p.localidade || p.instagram || p.site || p.outras_redes));
+  $('#mais-info').open = Boolean(p && (p.instagram || p.site || p.outras_redes));
+  // estado é obrigatório; só as empresas antigas (cadastradas antes da região existir) podem ficar sem
+  f.estado.required = !(p && !p.estado);
   fecharCombo();
+  comboCidade.fechar();
+  comboBairro.fechar();
   tagsProb.definir(p ? p.problemas || [] : []);
   $('#dlg-prosp').showModal();
   setTimeout(() => f.empresa.focus(), 50);
@@ -728,6 +762,101 @@ $('.combo-seta').addEventListener('mousedown', (e) => {
   if (combo.lista.hidden) { combo.input.focus(); abrirCombo(); } else fecharCombo();
 });
 
+// ---------- cidade e bairro: mesma ideia do nicho (o que a equipe já digitou vira sugestão) ----------
+const cacheLocais = new Map();
+async function buscarLocais(uf, cidade = '') {
+  if (!uf) return [];
+  const chave = uf + '|' + semAcento(cidade);
+  if (!cacheLocais.has(chave)) {
+    const p = new URLSearchParams({ estado: uf });
+    if (cidade) p.set('cidade', cidade);
+    cacheLocais.set(chave, await api('/api/locais?' + p).catch(() => []));
+  }
+  return cacheLocais.get(chave);
+}
+
+function criarComboLocal({ caixa, input, lista, carregar, vazio }) {
+  const c = { itens: [], ativo: -1, opcoes: [] };
+  function desenhar() {
+    const q = input.value.trim();
+    const nq = semAcento(q);
+    const achados = c.opcoes.filter((o) => semAcento(o.nome).includes(nq))
+      .sort((a, b) => semAcento(b.nome).startsWith(nq) - semAcento(a.nome).startsWith(nq) || b.total - a.total);
+    c.itens = achados.slice(0, 50);
+    if (c.ativo >= c.itens.length) c.ativo = c.itens.length - 1;
+    lista.innerHTML = c.itens.length
+      ? c.itens.map((it, i) => `<li role="option" data-i="${i}" class="combo-op ${i === c.ativo ? 'ativo' : ''}"><span>${destacar(it.nome, q)}</span><span class="combo-qtd">${it.total}</span></li>`).join('')
+      : `<li class="combo-vazio">${q ? 'Nova por aqui. Pode digitar, ela fica salva para todo mundo.' : vazio()}</li>`;
+    lista.querySelector('.ativo')?.scrollIntoView({ block: 'nearest' });
+  }
+  async function abrir() {
+    lista.hidden = false;
+    caixa.classList.add('aberto');
+    input.setAttribute('aria-expanded', 'true');
+    desenhar();
+    c.opcoes = await carregar();
+    if (!lista.hidden) desenhar();
+  }
+  function fechar() {
+    lista.hidden = true;
+    caixa.classList.remove('aberto');
+    input.setAttribute('aria-expanded', 'false');
+    c.ativo = -1;
+  }
+  function escolher(i) {
+    const it = c.itens[i];
+    if (it) input.value = it.nome;
+    fechar();
+    input.dispatchEvent(new Event('change'));
+  }
+  input.addEventListener('focus', abrir);
+  input.addEventListener('input', () => { c.ativo = input.value.trim() ? 0 : -1; if (lista.hidden) abrir(); else desenhar(); });
+  input.addEventListener('blur', () => setTimeout(fechar, 120));
+  input.addEventListener('keydown', (e) => {
+    const aberto = !lista.hidden;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!aberto) return abrir();
+      const n = c.itens.length;
+      if (!n) return;
+      c.ativo = e.key === 'ArrowDown' ? (c.ativo + 1) % n : (c.ativo - 1 + n) % n;
+      desenhar();
+    } else if (e.key === 'Enter' && aberto) {
+      e.preventDefault();
+      if (c.ativo >= 0) escolher(c.ativo); else fechar();
+    } else if (e.key === 'Escape' && aberto) {
+      e.preventDefault();
+      e.stopPropagation();
+      combo.segurarEsc = true; // não fecha o formulário inteiro
+      setTimeout(() => (combo.segurarEsc = false), 0);
+      fechar();
+    } else if (e.key === 'Tab' && aberto && c.ativo >= 0) {
+      escolher(c.ativo);
+    }
+  });
+  lista.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const li = e.target.closest('[data-i]');
+    if (li) escolher(Number(li.dataset.i));
+  });
+  caixa.querySelector('.combo-seta').addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    if (lista.hidden) { input.focus(); abrir(); } else fechar();
+  });
+  return { fechar };
+}
+
+const comboCidade = criarComboLocal({
+  caixa: $('#combo-cidade'), input: $('#in-cidade'), lista: $('#cidade-lista'),
+  carregar: () => buscarLocais($('#in-estado').value),
+  vazio: () => ($('#in-estado').value ? 'Nenhuma cidade desse estado ainda. Digite a primeira.' : 'Escolha o estado primeiro para ver as sugestões.'),
+});
+const comboBairro = criarComboLocal({
+  caixa: $('#combo-bairro'), input: $('#in-bairro'), lista: $('#bairro-lista'),
+  carregar: () => buscarLocais($('#in-estado').value, $('#in-cidade').value.trim()),
+  vazio: () => ($('#in-cidade').value.trim() ? 'Nenhum bairro dessa cidade ainda. Digite o primeiro.' : 'Escolha a cidade primeiro para ver as sugestões.'),
+});
+
 $('#form-prosp').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = e.target;
@@ -746,6 +875,7 @@ $('#form-prosp').addEventListener('submit', async (e) => {
       toast(dados.retorno_em ? `Registrada! Retorno em ${dataBr(dados.retorno_em)}` : 'Prospecção registrada!');
     }
     carregarRetornos().catch(() => {});
+    cacheLocais.clear(); // pode ter nascido uma cidade ou bairro novo
     $('#dlg-prosp').close();
     // pode ter nascido um nicho ou problema novo
     [estado.nichos, estado.problemas] = await Promise.all([api('/api/nichos'), api('/api/problemas')]);
@@ -1015,6 +1145,79 @@ $('#ni-busca').addEventListener('input', renderNichos);
 $('#ni-ordem').addEventListener('change', renderNichos);
 // "Ver todos os nichos" do painel leva o mesmo período
 $('#link-nichos').addEventListener('click', () => filtroNichos.definir(filtroPainel.estado));
+
+// =====================================================
+//  REGIÕES: onde a equipe prospecta e onde mais aceitam
+// =====================================================
+const filtroRegioes = criarFiltro($('#fp-regioes'), 'regioes', () => carregarRegioes().catch((err) => toast(err.message, 'erro')));
+let nivelRegiao = lerLocal('regioes-nivel') || 'cidade';
+const NOME_NIVEL = { estado: ['estado', 'estados'], cidade: ['cidade', 'cidades'], bairro: ['bairro', 'bairros'] };
+
+async function carregarRegioes() {
+  filtroRegioes.desenhar();
+  $$('.rg-niveis button').forEach((b) => b.classList.toggle('ativo', b.dataset.nivel === nivelRegiao));
+  const p = new URLSearchParams(filtroRegioes.query());
+  p.set('nivel', nivelRegiao);
+  if ($('#rg-estado').value) p.set('estado', $('#rg-estado').value);
+  if ($('#rg-nicho').value) p.set('nicho', $('#rg-nicho').value);
+  estado.regioes = await api('/api/regioes?' + p);
+  renderRegioes();
+}
+
+function nomeRegiao(r, nivel) {
+  if (nivel === 'estado') return { nome: NOME_UF[r.estado.trim()] || r.estado, onde: r.estado.trim() };
+  if (nivel === 'cidade') return { nome: r.cidade, onde: r.estado.trim() };
+  return { nome: r.bairro, onde: [r.cidade, r.estado.trim()].filter(Boolean).join(' – ') };
+}
+
+function renderRegioes() {
+  const d = estado.regioes || { regioes: [], total: 0, sem_info: 0, nivel: nivelRegiao };
+  const nivel = d.nivel;
+  const q = semAcento($('#rg-busca').value);
+  const ordem = $('#rg-ordem').value;
+  let lista = d.regioes.map((r, i) => ({ ...r, ...nomeRegiao(r, nivel), pos: i + 1, taxa: r.total ? r.aceitou / r.total : 0 }));
+  if (q) lista = lista.filter((r) => semAcento(`${r.nome} ${r.onde} ${NOME_UF[r.estado.trim()] || ''}`).includes(q));
+  if (ordem === 'taxa') lista.sort((a, b) => b.taxa - a.taxa || b.total - a.total);
+  else if (ordem === 'aceitou') lista.sort((a, b) => b.aceitou - a.aceitou || b.total - a.total);
+  else if (ordem === 'nome') lista.sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+  const [um, varios] = NOME_NIVEL[nivel];
+  const nichoSel = $('#rg-nicho');
+  const nichoTxt = nichoSel.value ? ` · ${nichoSel.options[nichoSel.selectedIndex].text}` : '';
+  $('#rg-titulo').textContent = `${lista.length} ${lista.length === 1 ? um : varios}${nichoTxt} · ${filtroRegioes.rotulo()}`;
+
+  // quantas empresas ficaram sem essa informação (para cobrar a equipe)
+  const sem = $('#rg-sem');
+  sem.hidden = !d.sem_info;
+  if (d.sem_info) {
+    sem.innerHTML = `Sem ${um} informad${nivel === 'cidade' ? 'a' : 'o'}: <b>${d.sem_info}</b> de ${d.total} empresa${d.total === 1 ? '' : 's'}`;
+  }
+
+  const max = Math.max(1, ...lista.map((r) => r.total));
+  $('#rg-lista').innerHTML = lista.length ? lista.map((r) => {
+    const seg = ['aceitou', 'pensando', 'recusou'].filter((k) => r[k] > 0)
+      .map((k) => `<i class="s-${k}" style="flex:${r[k]}" ${tip(`<b>${esc(r.nome)}</b><br>${STATUS[k]}: <b>${r[k]}</b> de ${r.total}`)}></i>`).join('');
+    return `<div class="rg-linha">
+      <span class="pos">${r.pos}º</span>
+      <span>
+        <span class="rk-top"><strong>${esc(r.nome)}<span class="rg-onde">${esc(r.onde)}</span></strong><b>${r.total}</b></span>
+        <span class="trilho" style="display:block"><span class="barra" style="width:${(r.total / max) * 100}%">${seg}</span></span>
+        <span class="rk-detalhe" style="display:block">${r.aceitou} aceitaram · ${r.pensando} pensando · ${r.recusou} recusaram · última em ${dataCurta(r.ultima)}</span>
+      </span>
+      <span class="rg-taxa ${r.total < 15 ? 'pouco' : ''}" ${r.total < 15 ? tip('Poucas empresas ainda: a porcentagem pode enganar.') : ''}><strong>${Math.round(r.taxa * 100)}%</strong><span>aceitaram</span></span>
+    </div>`;
+  }).join('') : `<div class="vazio"><strong>Nenhum${nivel === 'cidade' ? 'a' : ''} ${um} ainda</strong>Preencha a região no cadastro das empresas para ela aparecer aqui.</div>`;
+}
+$('.rg-niveis').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-nivel]');
+  if (!b || b.dataset.nivel === nivelRegiao) return;
+  nivelRegiao = b.dataset.nivel;
+  gravarLocal('regioes-nivel', nivelRegiao);
+  carregarRegioes().catch((err) => toast(err.message, 'erro'));
+});
+['#rg-estado', '#rg-nicho'].forEach((s) => $(s).addEventListener('change', () => carregarRegioes().catch((err) => toast(err.message, 'erro'))));
+$('#rg-busca').addEventListener('input', renderRegioes);
+$('#rg-ordem').addEventListener('change', renderRegioes);
 
 // =====================================================
 //  PAINEL
@@ -2025,6 +2228,7 @@ function atualizarTelaAtual() {
   else if (v === 'observacoes') carregarObs().catch(pega);
   else if (v === 'painel') carregarPainel().catch(pega);
   else if (v === 'nichos') carregarNichos().catch(pega);
+  else if (v === 'regioes') carregarRegioes().catch(pega);
   else if (v === 'equipe') carregarUsuarios().catch(pega);
   else if (v === 'prospeccoes') carregarProsp().catch(pega);
   else if (v === 'historico') carregarHistorico().catch(pega);
@@ -2034,6 +2238,7 @@ function atualizarTelaAtual() {
 // =====================================================
 //  RETORNOS — lembrete de ligar de novo para a empresa
 // =====================================================
+const ICONE_PIN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.5"/></svg>';
 const ICONE_RELOGIO = '<svg class="ico-rel" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2.5h6"/></svg>';
 const DIAS_SEM = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
 // data de hoje + n dias, no formato AAAA-MM-DD (no horário de quem está usando)
@@ -2241,7 +2446,8 @@ $('#prosp-excel').addEventListener('click', () => {
   const gestao = veTudo();
   const colunas = [
     { titulo: 'Empresa', tipo: 'texto' }, { titulo: 'Nicho', tipo: 'texto' }, { titulo: 'Resultado', tipo: 'texto' },
-    { titulo: 'Número', tipo: 'texto' }, { titulo: 'Localidade', tipo: 'texto' }, { titulo: 'Instagram', tipo: 'texto' },
+    { titulo: 'Número', tipo: 'texto' }, { titulo: 'Estado', tipo: 'texto' }, { titulo: 'Cidade', tipo: 'texto' },
+    { titulo: 'Bairro', tipo: 'texto' }, { titulo: 'Instagram', tipo: 'texto' },
     { titulo: 'Site', tipo: 'texto' }, { titulo: 'Outras redes', tipo: 'texto', largura: 28 },
     { titulo: 'Problemas', tipo: 'texto', largura: 34 }, { titulo: 'Anotações', tipo: 'longo', largura: 50 },
     { titulo: 'Ligar de novo em', tipo: 'data' }, { titulo: 'Prospectado por', tipo: 'texto' },
@@ -2249,7 +2455,8 @@ $('#prosp-excel').addEventListener('click', () => {
   ];
   if (gestao) colunas.push({ titulo: 'Valor do contrato', tipo: 'moeda' });
   const linhas = lista.map((p) => {
-    const l = [p.empresa, p.nicho, STATUS[p.status], p.telefone, p.localidade, p.instagram, p.site,
+    const l = [p.empresa, p.nicho, STATUS[p.status], p.telefone, (p.estado || '').trim() || null, p.cidade,
+      p.bairro || (!p.estado && p.localidade) || null, p.instagram, p.site,
       (p.outras_redes || '').replace(/\n+/g, ' · '), (p.problemas || []).join(', '), p.anotacoes,
       p.retorno, membro(p.usuario_id, p.usuario_nome).nome, p.criado_em];
     if (gestao) l.push(p.contrato_valor ?? null);
