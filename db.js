@@ -81,6 +81,13 @@ async function init() {
     -- comissão manual em porcentagem do valor do projeto (ex.: 15 = 15%)
     ALTER TABLE contratos ADD COLUMN IF NOT EXISTS comissao_pct NUMERIC(6,2) CHECK (comissao_pct >= 0 AND comissao_pct <= 100);
 
+    -- Sessões: quando a senha muda, o número sobe e todo login antigo (site e extensão) deixa de valer
+    ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS sessao INTEGER NOT NULL DEFAULT 0;
+
+    -- Desde quando a empresa está no resultado atual (Pensando há 7 dias vira Recusou sozinha).
+    -- As que já existiam ganham 7 dias a partir de agora, para nada mudar de surpresa.
+    ALTER TABLE prospeccoes ADD COLUMN IF NOT EXISTS status_em TIMESTAMPTZ NOT NULL DEFAULT now();
+
     -- Região da empresa: estado (sigla, obrigatório nas novas), cidade e bairro (opcionais)
     ALTER TABLE prospeccoes ADD COLUMN IF NOT EXISTS estado CHAR(2);
     ALTER TABLE prospeccoes ADD COLUMN IF NOT EXISTS cidade TEXT;

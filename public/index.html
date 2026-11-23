@@ -63,11 +63,13 @@
             <p class="dica" id="contagem"></p>
           </div>
           <div class="cab-acoes">
+            <button type="button" class="btn" id="btn-selecionar" title="Selecionar várias para excluir"><svg viewBox="0 0 24 24" aria-hidden="true" class="ico-sel"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M8.5 12l2.5 2.5 4.5-5"/></svg>Selecionar</button>
             <button type="button" class="btn btn-excel" id="prosp-excel" title="Baixar como planilha do Excel"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 12l5 6M14 12l-5 6"/></svg>Excel</button>
             <button class="btn primario" id="btn-nova">+ Nova prospecção</button>
           </div>
         </div>
         <section class="cartao retornos" id="retornos" hidden aria-label="Retornos"></section>
+        <section class="cartao vencendo" id="vencendo" hidden aria-label="Vão virar Recusou"></section>
         <div class="filtro-periodo" id="fp-prosp"></div>
         <div class="filtros">
           <input type="search" id="f-busca" placeholder="Buscar empresa, telefone, cidade ou nicho…">
@@ -79,6 +81,14 @@
           </select>
           <select id="f-nicho"></select>
           <select id="f-usuario"></select>
+        </div>
+        <div class="barra-sel" id="barra-sel" hidden>
+          <label class="check"><input type="checkbox" id="sel-todas"><span id="sel-todas-txt">Selecionar tudo</span></label>
+          <span class="sel-conta" id="sel-conta">0 selecionadas</span>
+          <div class="barra-sel-acoes">
+            <button type="button" class="btn fantasma" id="sel-cancelar">Cancelar</button>
+            <button type="button" class="btn perigo-cheio" id="sel-excluir" disabled>Excluir</button>
+          </div>
         </div>
         <div class="lista" id="lista-prosp"></div>
       </section>
@@ -455,6 +465,30 @@
           <div class="linha-botoes">
             <label class="btn">Escolher foto<input type="file" accept="image/*" id="in-foto" hidden></label>
             <button class="btn fantasma" id="btn-remover-foto">Remover foto</button>
+          </div>
+
+          <div class="ext-cartao">
+            <div class="ext-topo">
+              <div class="ext-icone"><svg viewBox="0 0 24 24"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.5"/></svg></div>
+              <div>
+                <h4>Extensão do Google Maps</h4>
+                <p class="dica">Abra uma empresa no Google Maps e salve aqui com um clique: nome, número e endereço já vêm preenchidos. Use o mesmo login e senha do sistema.</p>
+              </div>
+            </div>
+            <a class="btn primario ext-baixar" href="/api/extensao.zip" download>
+              <svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Baixar extensão
+            </a>
+            <details class="ext-passos">
+              <summary>Como instalar (Chrome, Brave ou Edge)</summary>
+              <ol>
+                <li>Baixe e <b>extraia</b> o arquivo. Vai aparecer a pasta <code>prospecta-extensao</code>. Guarde num lugar fixo, sem apagar.</li>
+                <li>No navegador, abra <code>chrome://extensions</code> (no Brave: <code>brave://extensions</code>; no Edge: <code>edge://extensions</code>).</li>
+                <li>Ligue o <b>Modo do desenvolvedor</b>, no canto da tela.</li>
+                <li>Clique em <b>Carregar sem compactação</b> e escolha a pasta <code>prospecta-extensao</code>.</li>
+                <li>Fixe o ícone da extensão na barra (o de quebra-cabeça) e entre com o seu login.</li>
+              </ol>
+              <p class="dica">Para atualizar: baixe de novo, substitua a pasta e clique no botão de recarregar da extensão.</p>
+            </details>
           </div>
 
           <div id="meus-ganhos" hidden></div>

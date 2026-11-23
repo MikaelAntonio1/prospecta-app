@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 300px; font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #15171c; background: #fff; }
+  .topo { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #e3e5ea; }
+  .topo img { width: 28px; height: 28px; border-radius: 8px; }
+  .topo strong { font-size: 15px; }
+  .corpo { padding: 16px; display: grid; gap: 12px; }
+  label { display: grid; gap: 5px; font-size: 12.5px; font-weight: 600; color: #5e6370; }
+  input { font: inherit; padding: 9px 11px; border: 1px solid #d5d8de; border-radius: 9px; outline: none; }
+  input:focus { border-color: #4f46e5; box-shadow: 0 0 0 3px #4f46e522; }
+  button { font: inherit; font-weight: 600; border: 0; border-radius: 9px; padding: 10px; cursor: pointer; }
+  .prim { background: #4f46e5; color: #fff; }
+  .prim:disabled { opacity: .6; cursor: default; }
+  .sec { background: #f1f2f5; color: #15171c; }
+  .erro { color: #dc2626; font-size: 13px; margin: 0; }
+  .dica { color: #6b7080; font-size: 12.5px; margin: 0; }
+  .quem { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #f5f6f8; border-radius: 10px; }
+  .bola { width: 34px; height: 34px; border-radius: 50%; background: #4f46e5; color: #fff; display: grid; place-items: center; font-weight: 700; flex: none; }
+  .quem span { display: block; font-size: 12px; color: #6b7080; }
+  .linha { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+  <div class="topo"><img src="icon48.png" alt=""><strong id="marca">Prospecta</strong></div>
+
+  <div class="corpo" id="carregando"><p class="dica">Carregando…</p></div>
+
+  <form class="corpo" id="form-login" hidden>
+    <p class="dica">Entre com o mesmo login e senha do <span class="nome-marca">Prospecta</span>.</p>
+    <label>Login<input name="login" autocomplete="username" required></label>
+    <label>Senha<input name="senha" type="password" autocomplete="current-password" required></label>
+    <p class="erro" id="erro-login" hidden></p>
+    <button class="prim" id="btn-entrar">Entrar</button>
+    <p class="dica" id="aguarde" hidden>Conectando… se o servidor estava parado, pode levar até 1 minuto.</p>
+  </form>
+
+  <div class="corpo" id="logado" hidden>
+    <div class="quem"><div class="bola" id="inicial"></div><div><strong id="nome"></strong><span id="login"></span></div></div>
+    <p class="dica">Abra uma empresa no Google Maps e clique em <b>Salvar no <span class="nome-marca">Prospecta</span></b>, no canto da tela.</p>
+    <div class="linha">
+      <button class="sec" id="btn-abrir">Abrir o sistema</button>
+      <button class="sec" id="btn-sair">Sair</button>
+    </div>
+  </div>
+<script src="popup.js"></script>
+</body>
+</html>

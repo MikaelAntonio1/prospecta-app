@@ -451,10 +451,18 @@ function renderLista() {
     return;
   }
 
+  // modo Selecionar: tira da seleção o que sumiu da lista (filtro mudou, foi excluído...)
+  for (const id of [...selecao.ids]) if (!estado.prosp.some((p) => p.id === id)) selecao.ids.delete(id);
+  el.classList.toggle('selecionando', selecao.ativo);
+
   el.innerHTML = estado.prosp.map((p) => {
     const m = membro(p.usuario_id, p.usuario_nome);
+    const podeSel = podeEditar(p);
+    const marcado = selecao.ids.has(p.id);
     return `
-      <button class="item" data-id="${p.id}">
+      <button class="item ${marcado ? 'marcado' : ''} ${selecao.ativo && !podeSel ? 'travado' : ''}" data-id="${p.id}"
+        ${selecao.ativo && !podeSel ? 'title="Você só pode excluir as suas prospecções"' : ''}>
+        ${selecao.ativo ? `<span class="caixa-sel ${marcado ? 'on' : ''}" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg></span>` : ''}
         <div class="item-princ">
           <strong>${esc(p.empresa)}</strong>
           <span class="sub">
@@ -469,11 +477,85 @@ function renderLista() {
         <time datetime="${esc(p.criado_em)}">${dataCurta(p.criado_em)}</time>
       </button>`;
   }).join('');
+  atualizarBarraSel();
 }
+
+// ---------- selecionar várias para excluir ----------
+const selecao = { ativo: false, ids: new Set() };
+const selecionaveis = () => estado.prosp.filter((p) => podeEditar(p));
+
+function modoSelecao(ligar) {
+  selecao.ativo = ligar;
+  selecao.ids.clear();
+  $('#barra-sel').hidden = !ligar;
+  $('#btn-selecionar').classList.toggle('ativo', ligar);
+  renderLista();
+}
+function atualizarBarraSel() {
+  if (!selecao.ativo) return;
+  const total = selecionaveis().length;
+  const n = selecao.ids.size;
+  $('#sel-conta').textContent = n === 1 ? '1 selecionada' : `${n} selecionadas`;
+  $('#sel-todas-txt').textContent = `Selecionar tudo (${total})`;
+  $('#sel-todas').checked = total > 0 && n === total;
+  $('#sel-todas').indeterminate = n > 0 && n < total;
+  $('#sel-excluir').disabled = !n;
+  $('#sel-excluir').textContent = n ? `Excluir ${n}` : 'Excluir';
+}
+$('#btn-selecionar').addEventListener('click', () => modoSelecao(!selecao.ativo));
+$('#sel-cancelar').addEventListener('click', () => modoSelecao(false));
+$('#sel-todas').addEventListener('change', (e) => {
+  selecao.ids = new Set(e.target.checked ? selecionaveis().map((p) => p.id) : []);
+  renderLista();
+});
+$('#sel-excluir').addEventListener('click', async () => {
+  const lista = estado.prosp.filter((p) => selecao.ids.has(p.id));
+  if (!lista.length) return;
+  const comContrato = lista.filter((p) => p.contrato_id).length;
+  const aviso = comContrato ? `\n\nAtenção: ${comContrato} delas ${comContrato === 1 ? 'tem' : 'têm'} contrato, que também será excluído.` : '';
+  if (!confirm(`Excluir ${lista.length === 1 ? `“${lista[0].empresa}”` : `${lista.length} prospecções`}? Isso não pode ser desfeito.${aviso}`)) return;
+  $('#sel-excluir').disabled = true;
+  $('#sel-excluir').textContent = 'Excluindo…';
+  try {
+    const r = await api('/api/prospeccoes/excluir', { method: 'POST', body: { ids: lista.map((p) => p.id) } });
+    const msg = r.excluidas === 1 ? '1 prospecção excluída' : `${r.excluidas} prospecções excluídas`;
+    if (r.puladas.length) {
+      toast(`${msg}. ${r.puladas.length} não ${r.puladas.length === 1 ? 'pôde' : 'puderam'} ser excluída${r.puladas.length === 1 ? '' : 's'} (${r.puladas.slice(0, 3).map((x) => `${x.empresa}: ${x.motivo}`).join('; ')}${r.puladas.length > 3 ? '…' : ''})`, 'erro');
+    } else toast(msg);
+    modoSelecao(false);
+    carregarProsp().catch(() => {});
+    carregarRetornos().catch(() => {});
+  } catch (err) {
+    toast(err.message, 'erro');
+    atualizarBarraSel();
+  }
+});
+
+// botão direito numa empresa (ou segurar o dedo no celular): já entra no modo Selecionar com ela marcada
+$('#lista-prosp').addEventListener('contextmenu', (e) => {
+  const b = e.target.closest('.item');
+  if (!b) return;
+  e.preventDefault();
+  const id = Number(b.dataset.id);
+  const p = estado.prosp.find((x) => x.id === id);
+  if (!p || !podeEditar(p)) return toast('Você só pode excluir as suas prospecções.', 'erro');
+  if (!selecao.ativo) modoSelecao(true);
+  if (selecao.ids.has(id)) selecao.ids.delete(id); else selecao.ids.add(id);
+  renderLista();
+});
 
 $('#lista-prosp').addEventListener('click', (e) => {
   const b = e.target.closest('.item');
-  if (b) abrirDetalhe(Number(b.dataset.id));
+  if (!b) return;
+  const id = Number(b.dataset.id);
+  if (selecao.ativo) {
+    const p = estado.prosp.find((x) => x.id === id);
+    if (!p || !podeEditar(p)) return toast('Você só pode excluir as suas prospecções.', 'erro');
+    if (selecao.ids.has(id)) selecao.ids.delete(id); else selecao.ids.add(id);
+    renderLista();
+    return;
+  }
+  abrirDetalhe(id);
 });
 
 let tBusca;
@@ -542,7 +624,7 @@ function abrirDetalhe(id) {
     </dl>
 
     <div class="rotulo">Anotações</div>
-    <p class="anotacoes">${p.anotacoes ? esc(p.anotacoes) : '<span class="vazio-campo">Sem anotações.</span>'}</p>
+    <p class="anotacoes">${p.anotacoes ? textoComLinks(p.anotacoes) : '<span class="vazio-campo">Sem anotações.</span>'}</p>
 
     ${veTudo() && (p.contrato_id || (p.status === 'aceitou' && pode('contratos'))) ? `
       <div class="contrato-linha">
@@ -2238,6 +2320,17 @@ function atualizarTelaAtual() {
 // =====================================================
 //  RETORNOS — lembrete de ligar de novo para a empresa
 // =====================================================
+// anotações: links viram botões curtos ("Google Maps: https://...enorme" → "Abrir no Google Maps ↗")
+function textoComLinks(t) {
+  return esc(t)
+    .replace(/Google Maps:\s*(https?:\/\/\S+)/g, (_, url) =>
+      `<a class="link-anot" href="${url}" target="_blank" rel="noopener">Abrir no Google Maps ↗</a>`)
+    .replace(/(^|[\s(])(https?:\/\/[^\s<]+)/g, (_, antes, url) => {
+      let nome = url;
+      try { nome = new URL(url.replace(/&amp;/g, '&')).hostname.replace(/^www\./, ''); } catch { /* fica o texto */ }
+      return `${antes}<a class="link-anot" href="${url}" target="_blank" rel="noopener">${nome} ↗</a>`;
+    });
+}
 const ICONE_PIN = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.5"/></svg>';
 const ICONE_RELOGIO = '<svg class="ico-rel" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2M9 2.5h6"/></svg>';
 const DIAS_SEM = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
@@ -2272,7 +2365,92 @@ async function carregarRetornos() {
   b.textContent = meus > 99 ? '99+' : meus;
   b.title = `${meus} retorno${meus === 1 ? '' : 's'} para hoje ou atrasado${meus === 1 ? '' : 's'}`;
   renderRetornos();
+  carregarVencendo().catch(() => {});
 }
+
+// ---------- Pensando há quase 7 dias: avisa antes de virar Recusou ----------
+estado.vencVerTudo = false;
+async function carregarVencendo() {
+  if (!estado.eu) return;
+  estado.venc = await api('/api/vencendo' + (veTudo() ? '?todos=1' : ''));
+  renderVencendo();
+}
+function rotuloVence(d) {
+  if (d <= 0) return 'vira Recusou hoje';
+  if (d === 1) return 'vira Recusou amanhã';
+  return `vira Recusou em ${d} dias`;
+}
+function renderVencendo() {
+  const el = $('#vencendo');
+  const todos = veTudo() && estado.retTodos;
+  const lista = (estado.venc || []).filter((p) => todos || p.usuario_id === estado.eu.id);
+  // "Esconder até amanhã" e lista vazia: some de vez, para não poluir a tela
+  if (!lista.length || lerLocal('vencendo-oculto') === hojeISO()) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  const LIMITE = 3;
+  const mostrar = estado.vencVerTudo ? lista : lista.slice(0, LIMITE);
+  const hoje = lista.filter((p) => p.vence_dias <= 0).length;
+  el.innerHTML = `
+    <div class="ret-cab">
+      <h3><svg class="ico-rel" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Vão virar Recusou</h3>
+      <span class="dica">${lista.length} em Pensando há quase 7 dias${hoje ? ` · <b class="t-atrasado">${hoje} hoje</b>` : ''}${todos ? ' · da equipe' : ''}. Fale com elas ou mantenha em Pensando.</span>
+      <button type="button" class="btn pequeno fantasma" id="venc-esconder" title="Some até amanhã">Esconder hoje</button>
+    </div>
+    <div class="ret-lista">${mostrar.map((p) => {
+      const zap = linkWhats(p.telefone);
+      const m = membro(p.usuario_id, p.usuario_nome);
+      const meu = podeEditar(p);
+      return `
+      <div class="ret-item ${p.vence_dias <= 0 ? 'atrasado' : 'hoje'}">
+        <span class="ret-quando">${esc(rotuloVence(p.vence_dias))}</span>
+        <button type="button" class="ret-empresa" data-venc-abrir="${p.id}">
+          <strong>${esc(p.empresa)}</strong>
+          <span>${[p.nicho, p.telefone].filter(Boolean).map(esc).join(' · ') || 'Sem número'}${todos ? ` · ${esc(p.usuario_id === estado.eu.id ? 'você' : primeiroNome(m.nome))}` : ''}</span>
+        </button>
+        <div class="ret-acoes">
+          ${zap ? `<a class="btn pequeno btn-zap" href="${esc(zap)}" target="_blank" rel="noopener noreferrer" title="Abrir no WhatsApp">WhatsApp</a>` : ''}
+          ${meu ? `<button type="button" class="btn pequeno" data-manter="${p.id}" title="Ganha mais 7 dias em Pensando">Ainda pensando</button>
+          <button type="button" class="btn pequeno fantasma perigo" data-recusar="${p.id}">Recusou</button>` : ''}
+        </div>
+      </div>`;
+    }).join('')}</div>
+    ${lista.length > LIMITE ? `<button type="button" class="btn largo fantasma" id="venc-mais">${estado.vencVerTudo ? 'Mostrar menos' : `Ver todas (${lista.length})`}</button>` : ''}`;
+}
+$('#vencendo').addEventListener('click', async (e) => {
+  const t = e.target;
+  if (t.closest('#venc-esconder')) { gravarLocal('vencendo-oculto', hojeISO()); renderVencendo(); toast('Escondido até amanhã'); return; }
+  if (t.closest('#venc-mais')) { estado.vencVerTudo = !estado.vencVerTudo; renderVencendo(); return; }
+  const abrir = t.closest('[data-venc-abrir]');
+  if (abrir) {
+    const id = Number(abrir.dataset.vencAbrir);
+    if (!estado.prosp.some((x) => x.id === id)) {
+      const r = estado.venc.find((x) => x.id === id);
+      if (r) estado.prosp.push(r);
+    }
+    abrirDetalhe(id);
+    return;
+  }
+  const manter = t.closest('[data-manter]');
+  const recusar = t.closest('[data-recusar]');
+  if (!manter && !recusar) return;
+  const id = Number((manter || recusar).dataset.manter || (manter || recusar).dataset.recusar);
+  const p = estado.venc.find((x) => x.id === id);
+  if (!p) return;
+  (manter || recusar).disabled = true;
+  try {
+    if (manter) {
+      await api(`/api/prospeccoes/${id}/manter`, { method: 'POST' });
+      toast(`${p.empresa}: mais 7 dias em Pensando`);
+    } else {
+      await api(`/api/prospeccoes/${id}`, { method: 'PUT', body: { status: 'recusou' } });
+      toast(`${p.empresa} marcada como Recusou`);
+    }
+    await carregarProsp();
+  } catch (err) {
+    toast(err.message, 'erro');
+    (manter || recusar).disabled = false;
+  }
+});
 
 function renderRetornos() {
   const el = $('#retornos');
@@ -2323,7 +2501,7 @@ function renderRetornos() {
 $('#retornos').addEventListener('click', async (e) => {
   const t = e.target;
   const quem = t.closest('[data-todos]');
-  if (quem) { estado.retTodos = quem.dataset.todos === '1'; gravarLocal('retornos-todos', estado.retTodos); renderRetornos(); return; }
+  if (quem) { estado.retTodos = quem.dataset.todos === '1'; gravarLocal('retornos-todos', estado.retTodos); renderRetornos(); renderVencendo(); return; }
   if (t.closest('#ret-mais')) { estado.retVerTudo = !estado.retVerTudo; renderRetornos(); return; }
   const abrir = t.closest('[data-abrir]');
   if (abrir) {
@@ -2360,9 +2538,25 @@ $('#retornos').addEventListener('click', async (e) => {
 });
 
 // quem deixa o sistema aberto: ao voltar para a aba, atualiza os retornos (o dia pode ter mudado)
+// e o que chegou pela extensão do Google Maps (ou por outra pessoa da equipe) aparece sem precisar apertar F5
+const algumaJanelaAberta = () => Boolean(document.querySelector('dialog[open]'));
+let ultimaAtualizacao = 0;
+function atualizarSemIncomodar() {
+  if (!estado.eu || document.visibilityState !== 'visible' || algumaJanelaAberta()) return;
+  if (Date.now() - ultimaAtualizacao < 3000) return; // foco e troca de aba chegam juntos
+  ultimaAtualizacao = Date.now();
+  const v = location.hash.slice(1) || 'prospeccoes';
+  if (v === 'perfil') return;
+  if (v === 'prospeccoes') carregarProsp().catch(() => {});
+  else atualizarTelaAtual();
+}
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && estado.eu) carregarRetornos().catch(() => {});
+  if (document.visibilityState !== 'visible' || !estado.eu) return;
+  carregarRetornos().catch(() => {});
+  atualizarSemIncomodar();
 });
+window.addEventListener('focus', atualizarSemIncomodar);
+setInterval(atualizarSemIncomodar, 45e3); // com a aba aberta na tela, confere a cada 45 segundos
 
 // =====================================================
 //  HISTÓRICO — quem fez o quê e quando (gestão)

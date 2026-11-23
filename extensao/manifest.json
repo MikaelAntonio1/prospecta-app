@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "__MARCA__ — salvar do Google Maps",
+  "short_name": "__MARCA__",
+  "version": "1.4.1",
+  "description": "Salve empresas do Google Maps direto no __MARCA__, com nome, telefone e endereço já preenchidos.",
+  "permissions": ["storage"],
+  "host_permissions": ["__ORIGEM__/*"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_title": "__MARCA__",
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" }
+  },
+  "icons": { "16": "icon16.png", "48": "icon48.png", "128": "icon128.png" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.google.com/maps/*",
+        "https://www.google.com.br/maps/*",
+        "https://maps.google.com/*",
+        "https://maps.google.com.br/*"
+      ],
+      "js": ["config.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

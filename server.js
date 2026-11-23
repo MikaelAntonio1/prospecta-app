@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const cookieParser = require('cookie-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
@@ -63,21 +64,35 @@ const publico = (u) => ({
 const veTudo = (u) => u.papel === 'admin' || u.papel === 'gerente';
 const pode = (u, perm) => u.papel === 'admin' || (u.papel === 'gerente' && Boolean(u.permissoes?.[perm]));
 
+// o site manda o login num cookie; a extensão do Google Maps manda no cabeçalho "Authorization: Bearer ..."
+const lerToken = (req) => {
+  const h = req.headers.authorization || '';
+  return h.startsWith('Bearer ') ? h.slice(7) : (req.cookies.token || '');
+};
+const criarToken = (u, validade = '7d') => jwt.sign({ id: u.id, s: u.sessao || 0 }, SECRET, { expiresIn: validade });
+const cookieLogin = (res, u) =>
+  res.cookie('token', criarToken(u), { httpOnly: true, sameSite: 'lax', secure: PROD, maxAge: 7 * 864e5 });
+
 const auth = wrap(async (req, res, next) => {
   let payload;
   try {
-    payload = jwt.verify(req.cookies.token || '', SECRET);
+    payload = jwt.verify(lerToken(req), SECRET);
   } catch {
     return erro(res, 401, 'Faça login para continuar.');
   }
   const { rows } = await pool.query(
-    'SELECT id, nome, login, papel, foto, ativo, verificado, permissoes, trocar_senha FROM usuarios WHERE id = $1',
+    'SELECT id, nome, login, papel, foto, ativo, verificado, permissoes, trocar_senha, sessao FROM usuarios WHERE id = $1',
     [payload.id]
   );
   const u = rows[0];
   if (!u || !u.ativo) {
     res.clearCookie('token');
     return erro(res, 401, 'Seu acesso foi desativado.');
+  }
+  // a senha mudou depois desse login: ele não vale mais (no site e na extensão)
+  if ((payload.s || 0) !== u.sessao) {
+    res.clearCookie('token');
+    return erro(res, 401, 'Sua senha foi alterada. Entre de novo com a senha nova.');
   }
   req.user = u;
   marcarVisto(u.id);
@@ -106,9 +121,10 @@ const precisa = (perm, msg) => (req, res, next) =>
 // ---------- login ----------
 const tentativas = new Map(); // proteção simples contra chute de senha
 
-app.post('/api/login', wrap(async (req, res) => {
+// confere login e senha (usado pelo site e pela extensão). Devolve o usuário, ou null se já respondeu com erro.
+async function conferirLogin(req, res) {
   const t = tentativas.get(req.ip) || { n: 0, ate: 0 };
-  if (t.ate > Date.now()) return erro(res, 429, 'Muitas tentativas. Aguarde alguns minutos.');
+  if (t.ate > Date.now()) { erro(res, 429, 'Muitas tentativas. Aguarde alguns minutos.'); return null; }
 
   const login = String(req.body.login || '').trim().toLowerCase();
   const senha = String(req.body.senha || '');
@@ -120,15 +136,87 @@ app.post('/api/login', wrap(async (req, res) => {
     t.n += 1;
     if (t.n >= 8) { t.ate = Date.now() + 15 * 60e3; t.n = 0; }
     tentativas.set(req.ip, t);
-    return erro(res, 401, 'Login ou senha incorretos.');
+    erro(res, 401, 'Login ou senha incorretos.');
+    return null;
   }
-  if (!u.ativo) return erro(res, 403, 'Seu acesso foi desativado. Fale com o administrador.');
-
+  if (!u.ativo) { erro(res, 403, 'Seu acesso foi desativado. Fale com o administrador.'); return null; }
   tentativas.delete(req.ip);
-  const token = jwt.sign({ id: u.id }, SECRET, { expiresIn: '7d' });
-  res.cookie('token', token, { httpOnly: true, sameSite: 'lax', secure: PROD, maxAge: 7 * 864e5 });
+  return u;
+}
+
+app.post('/api/login', wrap(async (req, res) => {
+  const u = await conferirLogin(req, res);
+  if (!u) return;
+  cookieLogin(res, u);
   res.json(publico(u));
 }));
+
+// ---------- extensão do Google Maps ----------
+// login da extensão: mesma conta e senha do site; devolve uma chave (token) que a extensão guarda
+app.post('/api/extensao/login', wrap(async (req, res) => {
+  const u = await conferirLogin(req, res);
+  if (!u) return;
+  if (u.trocar_senha) return erro(res, 403, 'Você está com uma senha provisória. Entre no site do Prospecta e troque a senha primeiro.');
+  await registrar({ user: u }, 'equipe', 'login', u.id, 'entrou na extensão do Google Maps');
+  res.json({ token: criarToken(u, '30d'), usuario: publico(u) });
+}));
+
+// baixar a extensão já configurada com o endereço deste Prospecta
+app.get('/api/extensao.zip', auth, wrap(async (req, res) => {
+  const origem = `${req.protocol}://${req.get('host')}`;
+  const marca = (await pool.query(`SELECT valor FROM config WHERE chave = 'marca'`)).rows[0]?.valor?.nome || NOME_PADRAO;
+  const pasta = path.join(__dirname, 'extensao');
+  const arquivos = [];
+  for (const nome of fs.readdirSync(pasta)) {
+    let dados = fs.readFileSync(path.join(pasta, nome));
+    if (nome === 'manifest.json' || nome === 'config.js') {
+      dados = Buffer.from(dados.toString('utf8')
+        .replaceAll('__ORIGEM__', origem)
+        .replaceAll('__MARCA__', marca.replace(/["\\]/g, '')));
+    }
+    arquivos.push({ nome: 'prospecta-extensao/' + nome, dados });
+  }
+  res.set('Content-Type', 'application/zip');
+  res.set('Content-Disposition', 'attachment; filename="prospecta-extensao.zip"');
+  res.send(criarZip(arquivos));
+}));
+
+// zip simples (sem compressão), para não precisar de biblioteca
+const TABELA_CRC = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (const b of buf) c = TABELA_CRC[(c ^ b) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function criarZip(arquivos) {
+  const partes = [];
+  const central = [];
+  let pos = 0;
+  for (const { nome, dados } of arquivos) {
+    const n = Buffer.from(nome, 'utf8');
+    const crc = crc32(dados);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt16LE(0x0800, 6);
+    local.writeUInt32LE(crc, 14); local.writeUInt32LE(dados.length, 18); local.writeUInt32LE(dados.length, 22);
+    local.writeUInt16LE(n.length, 26);
+    const cab = Buffer.alloc(46);
+    cab.writeUInt32LE(0x02014b50, 0); cab.writeUInt16LE(20, 4); cab.writeUInt16LE(20, 6); cab.writeUInt16LE(0x0800, 8);
+    cab.writeUInt32LE(crc, 16); cab.writeUInt32LE(dados.length, 20); cab.writeUInt32LE(dados.length, 24);
+    cab.writeUInt16LE(n.length, 28); cab.writeUInt32LE(pos, 42);
+    partes.push(local, n, dados);
+    central.push(cab, n);
+    pos += 30 + n.length + dados.length;
+  }
+  const tamCentral = central.reduce((s, b) => s + b.length, 0);
+  const fim = Buffer.alloc(22);
+  fim.writeUInt32LE(0x06054b50, 0); fim.writeUInt16LE(arquivos.length, 8); fim.writeUInt16LE(arquivos.length, 10);
+  fim.writeUInt32LE(tamCentral, 12); fim.writeUInt32LE(pos, 16);
+  return Buffer.concat([...partes, ...central, fim]);
+}
 
 // ---------- nome do sistema (aparece até na tela de login, por isso é público) ----------
 const NOME_PADRAO = 'Prospecta';
@@ -183,7 +271,10 @@ app.put('/api/me/senha', auth, wrap(async (req, res) => {
     return erro(res, 400, 'Senha atual incorreta.');
   }
   if (await bcrypt.compare(nova, rows[0].senha_hash)) return erro(res, 400, 'Escolha uma senha diferente da atual.');
-  await pool.query('UPDATE usuarios SET senha_hash = $1, trocar_senha = FALSE WHERE id = $2', [await bcrypt.hash(nova, 10), req.user.id]);
+  const { rows: [novo] } = await pool.query(
+    'UPDATE usuarios SET senha_hash = $1, trocar_senha = FALSE, sessao = sessao + 1 WHERE id = $2 RETURNING id, sessao',
+    [await bcrypt.hash(nova, 10), req.user.id]);
+  cookieLogin(res, novo); // este navegador continua logado; os outros logins (e a extensão) caem
   await registrar(req, 'equipe', 'senha', req.user.id, 'trocou a própria senha');
   res.json({ ok: true });
 }));
@@ -280,10 +371,14 @@ app.put('/api/usuarios/:id', auth, precisa('equipe', 'Você não tem permissão 
     const r = await pool.query(
       `UPDATE usuarios SET nome = $1, login = $2, papel = $3, ativo = $4, senha_hash = $5,
               verificado = $6, permissoes = $7::jsonb,
-              trocar_senha = CASE WHEN $9 THEN TRUE ELSE trocar_senha END WHERE id = $8
+              trocar_senha = CASE WHEN $9 THEN TRUE ELSE trocar_senha END,
+              sessao = CASE WHEN $10 THEN sessao + 1 ELSE sessao END WHERE id = $8
        RETURNING ${CAMPOS_U}`,
-      [nome, login, papel, ativo, hash, verificado, JSON.stringify(permissoes), id, Boolean(senha) && id !== req.user.id]
+      [nome, login, papel, ativo, hash, verificado, JSON.stringify(permissoes), id, Boolean(senha) && id !== req.user.id,
+       Boolean(senha)]
     );
+    // o ADM trocou a própria senha pela tela da Equipe: este navegador continua logado
+    if (senha && id === req.user.id) cookieLogin(res, { id, sessao: (u.sessao || 0) + 1 });
     const mud = [];
     if (nome !== u.nome) mud.push(`nome “${u.nome}” → “${nome}”`);
     if (login !== u.login) mud.push(`login ${u.login} → ${login}`);
@@ -410,10 +505,13 @@ app.get('/api/anos', auth, wrap(async (req, res) => {
 }));
 
 // ---------- prospecções ----------
+// Pensando por mais que isso (sem retorno marcado para frente) vira Recusou sozinho
+const DIAS_PENSANDO = 7;
 const SELECT_P = `
   SELECT p.*, n.nome AS nicho, u.nome AS usuario_nome,
          to_char(p.retorno_em, 'YYYY-MM-DD') AS retorno,
          (p.retorno_em - CURRENT_DATE) AS retorno_dias,
+         CASE WHEN p.status = 'pensando' THEN ((p.status_em + interval '${DIAS_PENSANDO} days')::date - CURRENT_DATE) END AS vence_dias,
          COALESCE((SELECT json_agg(pr.nome ORDER BY lower(pr.nome))
                      FROM prospeccao_problemas pp JOIN problemas pr ON pr.id = pp.problema_id
                     WHERE pp.prospeccao_id = p.id), '[]'::json) AS problemas
@@ -651,6 +749,7 @@ app.put('/api/prospeccoes/:id', auth, wrap(async (req, res) => {
   await pool.query(
     `UPDATE prospeccoes SET empresa=$1, nicho_id=$2, status=$3, telefone=$4, localidade=$5, instagram=$6,
             site=$7, outras_redes=$8, anotacoes=$9, retorno_em=$10::date, estado=$12, cidade=$13, bairro=$14,
+            status_em = CASE WHEN status <> $3 THEN now() ELSE status_em END,
             atualizado_em=now() WHERE id=$11`,
     [d.empresa, nid, status, d.telefone, d.localidade, d.instagram, d.site, d.outras_redes, d.anotacoes, retorno, atual.id,
      reg.estado, reg.cidade, reg.bairro]
@@ -698,6 +797,76 @@ app.delete('/api/prospeccoes/:id', auth, wrap(async (req, res) => {
     `excluiu ${atual.empresa}${deQuem(req, atual)}${ctr ? ` e o contrato de ${reais(ctr.valor)}` : ''}`);
   res.json({ ok: true });
 }));
+
+// excluir várias de uma vez (modo "Selecionar"). Mesmas regras de excluir uma: cada um só as suas,
+// e empresa com contrato só quem pode mexer em contratos. As que não podem são puladas e avisadas.
+app.post('/api/prospeccoes/excluir', auth, wrap(async (req, res) => {
+  const ids = [...new Set((Array.isArray(req.body.ids) ? req.body.ids : []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  if (!ids.length) return erro(res, 400, 'Nenhuma prospecção selecionada.');
+  if (ids.length > 1000) return erro(res, 400, 'Selecione no máximo 1000 de uma vez.');
+  const excluidas = [];
+  const puladas = [];
+  for (const id of ids) {
+    const atual = await buscarProsp(id);
+    if (!atual) continue;
+    if (!pode(req.user, 'prospeccoes') && atual.usuario_id !== req.user.id) {
+      puladas.push({ id, empresa: atual.empresa, motivo: 'é de outra pessoa' });
+      continue;
+    }
+    const ctr = (await pool.query('SELECT valor::float8 AS valor FROM contratos WHERE prospeccao_id = $1', [id])).rows[0];
+    if (ctr && !pode(req.user, 'contratos')) {
+      puladas.push({ id, empresa: atual.empresa, motivo: 'tem contrato registrado' });
+      continue;
+    }
+    await pool.query('DELETE FROM prospeccoes WHERE id = $1', [id]);
+    await registrar(req, 'prospeccao', 'excluiu', id,
+      `excluiu ${atual.empresa}${deQuem(req, atual)}${ctr ? ` e o contrato de ${reais(ctr.valor)}` : ''} (exclusão em lote)`);
+    excluidas.push(id);
+  }
+  res.json({ excluidas: excluidas.length, puladas });
+}));
+
+// ---------- Pensando há 7 dias → Recusou ----------
+// Avisa antes (aba Prospecções): as que viram Recusou nos próximos 2 dias.
+// Quem marcou "Ligar de novo" para hoje ou depois fica de fora (a pessoa ainda vai falar com a empresa).
+app.get('/api/vencendo', auth, wrap(async (req, res) => {
+  const todos = req.query.todos === '1' && veTudo(req.user);
+  const params = [];
+  let filtro = '';
+  if (!todos) { params.push(req.user.id); filtro = 'AND p.usuario_id = $1'; }
+  const { rows } = await pool.query(
+    `SELECT * FROM (${SELECT_P} WHERE p.status = 'pensando' AND (p.retorno_em IS NULL OR p.retorno_em < CURRENT_DATE) ${filtro}) x
+      WHERE x.vence_dias <= 2 ORDER BY x.vence_dias, x.empresa`, params);
+  res.json(rows);
+}));
+
+// "Ainda está pensando": ganha mais 7 dias
+app.post('/api/prospeccoes/:id/manter', auth, wrap(async (req, res) => {
+  const atual = await buscarProsp(Number(req.params.id));
+  if (!atual) return erro(res, 404, 'Prospecção não encontrada.');
+  if (!pode(req.user, 'prospeccoes') && atual.usuario_id !== req.user.id) {
+    return erro(res, 403, 'Você só pode alterar as suas prospecções.');
+  }
+  await pool.query(`UPDATE prospeccoes SET status_em = now() WHERE id = $1 AND status = 'pensando'`, [atual.id]);
+  await registrar(req, 'prospeccao', 'editou', atual.id, `${atual.empresa}: manteve em Pensando por mais ${DIAS_PENSANDO} dias`);
+  res.json(await buscarProsp(atual.id));
+}));
+
+async function recusarVencidas() {
+  try {
+    const { rows } = await pool.query(`
+      UPDATE prospeccoes SET status = 'recusou', status_em = now(), atualizado_em = now()
+       WHERE status = 'pensando' AND status_em <= now() - interval '${DIAS_PENSANDO} days'
+         AND (retorno_em IS NULL OR retorno_em < CURRENT_DATE)
+      RETURNING id, empresa`);
+    if (!rows.length) return;
+    const nomes = rows.slice(0, 8).map((r) => r.empresa).join(', ') + (rows.length > 8 ? ` e mais ${rows.length - 8}` : '');
+    await registrar({ user: { id: null, nome: 'Sistema' } }, 'prospeccao', 'editou', rows.length === 1 ? rows[0].id : null,
+      `${rows.length === 1 ? 'mudou' : `mudou ${rows.length} empresas`} para Recusou depois de ${DIAS_PENSANDO} dias em Pensando: ${nomes}`);
+  } catch (e) {
+    console.warn('Não consegui atualizar as que passaram de 7 dias em Pensando:', e.message);
+  }
+}
 
 // ---------- retornos (lembretes de ligar de novo) ----------
 // Atrasados, de hoje e dos próximos 7 dias. Funcionário vê os dele; gestão pode ver os da equipe (?todos=1).
@@ -1280,5 +1449,9 @@ app.use((err, req, res, next) => {
 });
 
 init()
-  .then(() => app.listen(PORT, () => console.log(`Rodando em http://localhost:${PORT}`)))
+  .then(() => {
+    recusarVencidas();
+    setInterval(recusarVencidas, 60 * 60e3); // confere de hora em hora
+    app.listen(PORT, () => console.log(`Rodando em http://localhost:${PORT}`));
+  })
   .catch((e) => { console.error('Falha ao iniciar:', e.message); process.exit(1); });
